@@ -1,0 +1,15 @@
+{
+  "name": "read_recent_activity",
+  "purpose": "Read the latest observable agent events.",
+  "objects": [
+    "activity_events"
+  ],
+  "fields": {
+    "activity_events": [
+      "event_seq",
+      "event_type",
+      "status",
+      "content_text"
+    ]
+  }
+}

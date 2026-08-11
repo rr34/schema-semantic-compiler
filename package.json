@@ -1,0 +1,31 @@
+{
+  "name": "schema-semantic-compiler",
+  "version": "0.1.0",
+  "description": "Compile database mechanics and one human-maintained semantic form into small, inspectable AI context projections.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./sqlite": "./src/adapters/sqlite.js",
+    "./mariadb": "./src/adapters/mariadb.js"
+  },
+  "bin": {
+    "schema-semantic-compiler": "./bin/schema-semantic-compiler.js",
+    "ssc": "./bin/schema-semantic-compiler.js"
+  },
+  "files": [
+    "bin",
+    "schemas",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "check": "node --check bin/schema-semantic-compiler.js && node --check src/*.js && node --check src/adapters/*.js",
+    "test": "node --test test/*.test.js"
+  },
+  "optionalDependencies": {
+    "mysql2": "^3.14.0"
+  }
+}

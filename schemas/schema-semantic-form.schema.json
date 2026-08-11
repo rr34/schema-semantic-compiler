@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:schema-semantic-compiler:schema-semantic-form:1",
+  "title": "Schema Semantic Compiler single-file form",
+  "type": "object",
+  "required": ["kind", "contractVersion", "compiler", "database", "instructions", "objects"],
+  "properties": {
+    "kind": { "const": "schema-semantic-form" },
+    "contractVersion": { "const": 1 },
+    "compiler": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "schema-semantic-compiler" },
+        "version": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "database": {
+      "type": "object",
+      "required": ["engine", "name", "schemaVersion", "schemaFingerprint", "extractedAt"],
+      "properties": {
+        "engine": { "enum": ["sqlite", "mariadb"] },
+        "name": { "type": ["string", "null"] },
+        "schemaVersion": { "type": ["string", "integer", "null"] },
+        "schemaFingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "extractedAt": { "type": "string", "format": "date-time" }
+      },
+      "additionalProperties": false
+    },
+    "instructions": { "type": "object" },
+    "objects": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/objectForm" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "nullableText": { "type": ["string", "null"] },
+    "textArray": { "type": "array", "items": { "type": "string" } },
+    "objectSemantics": {
+      "type": "object",
+      "required": ["purpose", "rowMeaning", "sourceOfTruth", "synonyms", "importantRules", "sensitivity"],
+      "properties": {
+        "purpose": { "$ref": "#/$defs/nullableText" },
+        "rowMeaning": { "$ref": "#/$defs/nullableText" },
+        "sourceOfTruth": { "type": ["boolean", "null"] },
+        "synonyms": { "$ref": "#/$defs/textArray" },
+        "importantRules": { "$ref": "#/$defs/textArray" },
+        "sensitivity": { "$ref": "#/$defs/nullableText" }
+      },
+      "additionalProperties": false
+    },
+    "fieldSemantics": {
+      "type": "object",
+      "required": ["meaning", "units", "format", "allowedValueMeanings", "synonyms", "examples", "importantRules", "sensitivity"],
+      "properties": {
+        "meaning": { "$ref": "#/$defs/nullableText" },
+        "units": { "$ref": "#/$defs/nullableText" },
+        "format": { "$ref": "#/$defs/nullableText" },
+        "allowedValueMeanings": { "type": "object", "additionalProperties": { "type": "string" } },
+        "synonyms": { "$ref": "#/$defs/textArray" },
+        "examples": { "type": "array" },
+        "importantRules": { "$ref": "#/$defs/textArray" },
+        "sensitivity": { "$ref": "#/$defs/nullableText" }
+      },
+      "additionalProperties": false
+    },
+    "relationshipSemantics": {
+      "type": "object",
+      "required": ["meaning", "cardinality", "importantRules"],
+      "properties": {
+        "meaning": { "$ref": "#/$defs/nullableText" },
+        "cardinality": { "$ref": "#/$defs/nullableText" },
+        "importantRules": { "$ref": "#/$defs/textArray" }
+      },
+      "additionalProperties": false
+    },
+    "fieldForm": {
+      "type": "object",
+      "required": ["mechanics", "semantics"],
+      "properties": {
+        "mechanics": { "type": "object", "required": ["present", "name"], "additionalProperties": true },
+        "semantics": { "$ref": "#/$defs/fieldSemantics" }
+      },
+      "additionalProperties": false
+    },
+    "relationshipForm": {
+      "type": "object",
+      "required": ["mechanics", "semantics"],
+      "properties": {
+        "mechanics": { "type": "object", "required": ["present", "id", "columns", "targetObject", "targetColumns"], "additionalProperties": true },
+        "semantics": { "$ref": "#/$defs/relationshipSemantics" }
+      },
+      "additionalProperties": false
+    },
+    "objectForm": {
+      "type": "object",
+      "required": ["mechanics", "semantics", "fields", "relationships"],
+      "properties": {
+        "mechanics": { "type": "object", "required": ["present", "kind", "definition", "indexes"], "additionalProperties": true },
+        "semantics": { "$ref": "#/$defs/objectSemantics" },
+        "fields": { "type": "object", "additionalProperties": { "$ref": "#/$defs/fieldForm" } },
+        "relationships": { "type": "object", "additionalProperties": { "$ref": "#/$defs/relationshipForm" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}
