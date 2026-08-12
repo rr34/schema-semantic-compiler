@@ -4,16 +4,22 @@ import {
   PROJECTION_CONTRACT_VERSION,
   PROJECTION_KIND,
 } from "./constants.js";
-import { assertSemanticForm } from "./form.js";
+import { assertSemanticForm, upgradeSemanticForm } from "./form.js";
+import { resolveFieldSemantics } from "./inheritance.js";
+import { rankSchemaObjects } from "./routing.js";
 import { analyzeSqlReferences } from "./sql-references.js";
 import { asNullableText, fingerprint, uniqueSorted } from "./util.js";
 
 function normalizeOperation(operation) {
-  if (!operation) return { name: null, purpose: null, objects: [], fields: {} };
+  if (!operation) return { name: null, purpose: null, schemaObjects: [], fields: {} };
   return {
     name: asNullableText(operation.name),
     purpose: asNullableText(operation.purpose),
-    objects: Array.isArray(operation.objects) ? operation.objects.map(String) : [],
+    schemaObjects: Array.isArray(operation.schemaObjects)
+      ? operation.schemaObjects.map(String)
+      : Array.isArray(operation.objects)
+        ? operation.objects.map(String)
+        : [],
     fields: operation.fields && typeof operation.fields === "object" ? operation.fields : {},
   };
 }
@@ -31,47 +37,26 @@ function mergeSelections(target, source) {
   }
 }
 
-function selectDependencies(form, selectedObjects, selectedFields, reasons) {
-  const queue = [...selectedObjects];
-  const visited = new Set();
-  while (queue.length > 0) {
-    const objectName = queue.shift();
-    if (visited.has(objectName)) continue;
-    visited.add(objectName);
-    const object = form.objects[objectName];
-    if (!object || object.mechanics.present === false) continue;
-
-    if (object.mechanics.kind === "view" && object.mechanics.definition) {
-      const references = analyzeSqlReferences(object.mechanics.definition, form.objects);
-      for (const dependency of references.objects) {
-        if (dependency === objectName) continue;
-        if (!selectedObjects.has(dependency)) {
-          selectedObjects.add(dependency);
-          queue.push(dependency);
-        }
-        addReason(reasons, dependency, `Required by view ${objectName}.`);
-      }
-      mergeSelections(selectedFields, new Map(
-        Object.entries(references.fields).map(([name, fields]) => [name, new Set(fields)]),
-      ));
-    }
-  }
-}
-
-function fieldProjection(field) {
+function fieldProjection(field, semantics) {
+  const allowedValues = field.mechanics.allowedValues ?? [];
+  const allowedValueMeanings = allowedValues.length > 0
+    ? Object.fromEntries(Object.entries(semantics.allowedValueMeanings).filter(([value]) => allowedValues.includes(value)))
+    : semantics.allowedValueMeanings;
   return {
     type: field.mechanics.type,
     nullable: field.mechanics.nullable,
     primaryKey: Number(field.mechanics.primaryKeyPosition) > 0,
     generated: Boolean(field.mechanics.generated),
-    allowedValues: field.mechanics.allowedValues ?? [],
-    meaning: field.semantics.meaning,
-    units: field.semantics.units,
-    format: field.semantics.format,
-    allowedValueMeanings: field.semantics.allowedValueMeanings,
-    synonyms: field.semantics.synonyms,
-    importantRules: field.semantics.importantRules,
-    sensitivity: field.semantics.sensitivity,
+    allowedValues,
+    inheritsFrom: semantics.inheritsFrom,
+    meaning: semantics.meaning,
+    units: semantics.units,
+    format: semantics.format,
+    allowedValueMeanings,
+    synonyms: semantics.synonyms,
+    examples: semantics.examples,
+    importantRules: semantics.importantRules,
+    sensitivity: semantics.sensitivity,
   };
 }
 
@@ -88,25 +73,59 @@ function relationshipProjection(relationship) {
   };
 }
 
-export function compileSchemaProjection({ form, sql = null, operation = null, now = new Date() }) {
+export function compileSchemaProjection({
+  form,
+  sql = null,
+  operation = null,
+  requestText = null,
+  routing = null,
+  now = new Date(),
+}) {
+  form = upgradeSemanticForm(form);
   assertSemanticForm(form);
   const normalizedOperation = normalizeOperation(operation);
-  const sqlReferences = sql ? analyzeSqlReferences(sql, form.objects) : { objects: [], fields: {}, selectAll: false };
+  const sqlReferences = sql ? analyzeSqlReferences(sql, form.schemaObjects) : { objects: [], fields: {}, selectAll: false };
   const selectedObjects = new Set();
   const selectedFields = new Map();
   const reasons = {};
+  const routingLimit = Math.max(1, Math.min(20, Number.parseInt(routing?.limit ?? 3, 10) || 3));
+  const routingMinimumScore = Math.max(0, Number(routing?.minimumScore ?? 3) || 0);
+  const routingCandidates = requestText
+    ? rankSchemaObjects({
+        form,
+        requestText,
+        limit: routingLimit,
+        minimumScore: routingMinimumScore,
+      })
+    : [];
 
-  for (const objectName of normalizedOperation.objects) {
-    if (!Object.hasOwn(form.objects, objectName)) throw new Error(`Unknown semantic object in operation: ${objectName}`);
-    selectedObjects.add(objectName);
-    addReason(reasons, objectName, "Named by the operation.");
+  for (const candidate of routingCandidates) {
+    selectedObjects.add(candidate.schemaObject);
+    addReason(
+      reasons,
+      candidate.schemaObject,
+      `Selected from request language with routing score ${candidate.score}.`,
+    );
+    for (const field of candidate.fieldMatches) {
+      addReason(
+        reasons,
+        `${candidate.schemaObject}.${field.field}`,
+        `Matched request language during pre-SQL routing with score ${field.score}.`,
+      );
+    }
   }
-  for (const [objectName, fields] of Object.entries(normalizedOperation.fields)) {
-    if (!Object.hasOwn(form.objects, objectName)) throw new Error(`Unknown semantic object in operation fields: ${objectName}`);
-    selectedObjects.add(objectName);
-    if (!selectedFields.has(objectName)) selectedFields.set(objectName, new Set());
-    for (const fieldName of fields) selectedFields.get(objectName).add(String(fieldName));
-    addReason(reasons, objectName, "Fields were named by the operation.");
+
+  for (const schemaObjectName of normalizedOperation.schemaObjects) {
+    if (!Object.hasOwn(form.schemaObjects, schemaObjectName)) throw new Error(`Unknown semantic schema object in operation: ${schemaObjectName}`);
+    selectedObjects.add(schemaObjectName);
+    addReason(reasons, schemaObjectName, "Named by the operation.");
+  }
+  for (const [schemaObjectName, fields] of Object.entries(normalizedOperation.fields)) {
+    if (!Object.hasOwn(form.schemaObjects, schemaObjectName)) throw new Error(`Unknown semantic schema object in operation fields: ${schemaObjectName}`);
+    selectedObjects.add(schemaObjectName);
+    if (!selectedFields.has(schemaObjectName)) selectedFields.set(schemaObjectName, new Set());
+    for (const fieldName of fields) selectedFields.get(schemaObjectName).add(String(fieldName));
+    addReason(reasons, schemaObjectName, "Fields were named by the operation.");
   }
   for (const objectName of sqlReferences.objects) {
     selectedObjects.add(objectName);
@@ -114,35 +133,34 @@ export function compileSchemaProjection({ form, sql = null, operation = null, no
   }
   mergeSelections(selectedFields, sqlReferences.fields);
 
-  if (selectedObjects.size === 0) {
-    throw new Error("Projection requires SQL that references a known object or an operation with explicit objects.");
+  if (selectedObjects.size === 0 && !requestText) {
+    throw new Error("Projection requires SQL that references a known schema object or an operation with explicit schemaObjects.");
   }
-  selectDependencies(form, selectedObjects, selectedFields, reasons);
-
-  const projectionObjects = {};
+  const projectionSchemaObjects = {};
   const unresolved = [];
   for (const objectName of uniqueSorted([...selectedObjects])) {
-    const object = form.objects[objectName];
-    if (!object || object.mechanics.present === false) {
+    const schemaObject = form.schemaObjects[objectName];
+    if (!schemaObject || schemaObject.mechanics.present === false) {
       unresolved.push(`${objectName} is absent from the current database schema.`);
       continue;
     }
     const requestedFields = selectedFields.get(objectName) ?? new Set();
     const includeAllFields = sqlReferences.selectAll || requestedFields.size === 0;
     const fields = {};
-    for (const [fieldName, field] of Object.entries(object.fields)) {
+    for (const [fieldName, field] of Object.entries(schemaObject.fields)) {
       if (field.mechanics.present === false) continue;
       if (!includeAllFields && !requestedFields.has(fieldName)) continue;
-      fields[fieldName] = fieldProjection(field);
+      const semantics = resolveFieldSemantics(form, objectName, fieldName);
+      fields[fieldName] = fieldProjection(field, semantics);
       addReason(reasons, `${objectName}.${fieldName}`, includeAllFields ? "Included to describe the selected object." : "Referenced by the operation or SQL.");
-      if (!asNullableText(field.semantics.meaning)) unresolved.push(`${objectName}.${fieldName}: meaning is blank.`);
+      if (!asNullableText(semantics.meaning)) unresolved.push(`${objectName}.${fieldName}: meaning is blank.`);
     }
     for (const fieldName of requestedFields) {
-      if (!Object.hasOwn(object.fields, fieldName)) unresolved.push(`${objectName}.${fieldName}: field is not present in the semantic form.`);
+      if (!Object.hasOwn(schemaObject.fields, fieldName)) unresolved.push(`${objectName}.${fieldName}: field is not present in the semantic form.`);
     }
 
     const relationships = {};
-    for (const [relationshipId, relationship] of Object.entries(object.relationships)) {
+    for (const [relationshipId, relationship] of Object.entries(schemaObject.relationships)) {
       if (relationship.mechanics.present === false) continue;
       const usesSourceField = relationship.mechanics.columns.some((field) => includeAllFields || requestedFields.has(field));
       const joinsSelectedObject = selectedObjects.has(relationship.mechanics.targetObject);
@@ -152,16 +170,17 @@ export function compileSchemaProjection({ form, sql = null, operation = null, no
       if (!asNullableText(relationship.semantics.meaning)) unresolved.push(`${objectName}.${relationshipId}: relationship meaning is blank.`);
     }
 
-    if (!asNullableText(object.semantics.purpose)) unresolved.push(`${objectName}: purpose is blank.`);
-    if (!asNullableText(object.semantics.rowMeaning)) unresolved.push(`${objectName}: rowMeaning is blank.`);
-    projectionObjects[objectName] = {
-      kind: object.mechanics.kind,
-      purpose: object.semantics.purpose,
-      rowMeaning: object.semantics.rowMeaning,
-      sourceOfTruth: object.semantics.sourceOfTruth,
-      synonyms: object.semantics.synonyms,
-      importantRules: object.semantics.importantRules,
-      sensitivity: object.semantics.sensitivity,
+    if (!asNullableText(schemaObject.semantics.purpose)) unresolved.push(`${objectName}: purpose is blank.`);
+    if (!asNullableText(schemaObject.semantics.rowMeaning)) unresolved.push(`${objectName}: rowMeaning is blank.`);
+    projectionSchemaObjects[objectName] = {
+      kind: schemaObject.mechanics.kind,
+      purpose: schemaObject.semantics.purpose,
+      rowMeaning: schemaObject.semantics.rowMeaning,
+      sourceOfTruth: schemaObject.semantics.sourceOfTruth,
+      derivedFrom: schemaObject.semantics.derivedFrom,
+      synonyms: schemaObject.semantics.synonyms,
+      importantRules: schemaObject.semantics.importantRules,
+      sensitivity: schemaObject.semantics.sensitivity,
       fields,
       relationships,
     };
@@ -170,8 +189,10 @@ export function compileSchemaProjection({ form, sql = null, operation = null, no
   const deterministicProduct = {
     sourceFingerprint: form.database.schemaFingerprint,
     operation: normalizedOperation,
+    requestText: requestText ?? null,
+    routingCandidates,
     sql: sql ?? null,
-    projection: projectionObjects,
+    projection: projectionSchemaObjects,
   };
   const projectionId = fingerprint(deterministicProduct);
   return {
@@ -190,14 +211,21 @@ export function compileSchemaProjection({ form, sql = null, operation = null, no
     },
     operation: {
       ...normalizedOperation,
+      requestText: requestText ?? null,
       sql: sql ?? null,
     },
     schemaProjection: {
       purpose: normalizedOperation.purpose,
-      objects: projectionObjects,
+      schemaObjects: projectionSchemaObjects,
     },
     compilerTrace: {
       selectionReasons: reasons,
+      requestRouting: {
+        attempted: Boolean(requestText),
+        candidateLimit: routingLimit,
+        minimumScore: routingMinimumScore,
+        candidates: routingCandidates,
+      },
       unresolvedSemantics: uniqueSorted(unresolved),
       notice: "This product explains schema context only. It did not generate, authorize, or execute SQL.",
     },

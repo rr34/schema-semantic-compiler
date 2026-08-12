@@ -8,6 +8,8 @@ import {
   PACKAGE_VERSION,
 } from "./constants.js";
 import { normalizeCatalog } from "./catalog.js";
+import { resolveFieldSemantics } from "./inheritance.js";
+import { analyzeSqlReferences } from "./sql-references.js";
 import { asNullableText, clone } from "./util.js";
 
 function mergeKnownShape(defaults, existing) {
@@ -48,26 +50,92 @@ function mechanicalObject(object) {
   };
 }
 
+function inheritanceCandidates(schemaObjects, schemaObjectName, schemaObject) {
+  if (schemaObject.mechanics.kind !== "view" || !schemaObject.mechanics.definition) return [];
+  return analyzeSqlReferences(schemaObject.mechanics.definition, schemaObjects).objects
+    .filter((name) => name !== schemaObjectName && schemaObjects[name]?.mechanics.present !== false);
+}
+
+function seedDerivedInheritance(form, { schemaObjectNames = null, fieldNames = null } = {}) {
+  for (const [schemaObjectName, schemaObject] of Object.entries(form.schemaObjects)) {
+    const seedSchemaObject = schemaObjectNames == null || schemaObjectNames.has(schemaObjectName);
+    if (seedSchemaObject && schemaObject.semantics.derivedFrom.length === 0) {
+      schemaObject.semantics.derivedFrom = inheritanceCandidates(form.schemaObjects, schemaObjectName, schemaObject);
+    }
+    const sources = schemaObject.semantics.derivedFrom;
+    if (sources.length === 0) continue;
+    for (const [fieldName, field] of Object.entries(schemaObject.fields)) {
+      const qualifiedName = `${schemaObjectName}.${fieldName}`;
+      const seedField = fieldNames == null || fieldNames.has(qualifiedName) || seedSchemaObject;
+      if (!seedField || asNullableText(field.semantics.inheritsFrom)) continue;
+      const matches = sources.filter((sourceName) => {
+        const sourceField = form.schemaObjects[sourceName]?.fields?.[fieldName];
+        return sourceField && sourceField.mechanics.present !== false;
+      });
+      if (matches.length === 1) field.semantics.inheritsFrom = `${matches[0]}.${fieldName}`;
+    }
+  }
+}
+
 function unresolvedFields(form) {
   const unresolved = [];
-  for (const [objectName, object] of Object.entries(form.objects)) {
-    if (object.mechanics.present === false) continue;
-    if (!asNullableText(object.semantics.purpose)) unresolved.push(`objects.${objectName}.semantics.purpose`);
-    if (!asNullableText(object.semantics.rowMeaning)) unresolved.push(`objects.${objectName}.semantics.rowMeaning`);
-    for (const [fieldName, field] of Object.entries(object.fields)) {
+  for (const [schemaObjectName, schemaObject] of Object.entries(form.schemaObjects)) {
+    if (schemaObject.mechanics.present === false) continue;
+    if (!asNullableText(schemaObject.semantics.purpose)) unresolved.push(`schemaObjects.${schemaObjectName}.semantics.purpose`);
+    if (!asNullableText(schemaObject.semantics.rowMeaning)) unresolved.push(`schemaObjects.${schemaObjectName}.semantics.rowMeaning`);
+    for (const [fieldName, field] of Object.entries(schemaObject.fields)) {
       if (field.mechanics.present === false) continue;
-      if (!asNullableText(field.semantics.meaning)) {
-        unresolved.push(`objects.${objectName}.fields.${fieldName}.semantics.meaning`);
+      const resolved = resolveFieldSemantics(form, schemaObjectName, fieldName);
+      if (!asNullableText(resolved.meaning)) {
+        unresolved.push(`schemaObjects.${schemaObjectName}.fields.${fieldName}.semantics.meaning`);
       }
     }
-    for (const [relationshipId, relationship] of Object.entries(object.relationships)) {
+    for (const [relationshipId, relationship] of Object.entries(schemaObject.relationships)) {
       if (relationship.mechanics.present === false) continue;
       if (!asNullableText(relationship.semantics.meaning)) {
-        unresolved.push(`objects.${objectName}.relationships.${relationshipId}.semantics.meaning`);
+        unresolved.push(`schemaObjects.${schemaObjectName}.relationships.${relationshipId}.semantics.meaning`);
       }
     }
   }
   return unresolved;
+}
+
+function upgradeSchemaObject(schemaObject) {
+  const upgraded = clone(schemaObject);
+  upgraded.semantics = mergeKnownShape(emptyObjectSemantics(), schemaObject.semantics);
+  upgraded.fields = Object.fromEntries(Object.entries(schemaObject.fields ?? {}).map(([fieldName, field]) => [
+    fieldName,
+    {
+      ...clone(field),
+      semantics: mergeKnownShape(emptyFieldSemantics(), field.semantics),
+    },
+  ]));
+  upgraded.relationships = Object.fromEntries(Object.entries(schemaObject.relationships ?? {}).map(([id, relationship]) => [
+    id,
+    {
+      ...clone(relationship),
+      semantics: mergeKnownShape(emptyRelationshipSemantics(), relationship.semantics),
+    },
+  ]));
+  return upgraded;
+}
+
+export function upgradeSemanticForm(form) {
+  if (!form || typeof form !== "object" || Array.isArray(form)) throw new Error("Semantic form must be a JSON object.");
+  if (form.kind !== FORM_KIND) throw new Error(`Semantic form kind must be ${FORM_KIND}.`);
+  if (form.contractVersion === FORM_CONTRACT_VERSION && form.schemaObjects) return form;
+  if (form.contractVersion !== 1 || !form.objects || typeof form.objects !== "object" || Array.isArray(form.objects)) {
+    throw new Error(`Unsupported semantic form contract version: ${String(form.contractVersion)}.`);
+  }
+  const upgraded = clone(form);
+  upgraded.contractVersion = FORM_CONTRACT_VERSION;
+  upgraded.compiler = { name: PACKAGE_NAME, version: PACKAGE_VERSION };
+  upgraded.schemaObjects = Object.fromEntries(
+    Object.entries(form.objects).map(([name, schemaObject]) => [name, upgradeSchemaObject(schemaObject)]),
+  );
+  delete upgraded.objects;
+  seedDerivedInheritance(upgraded);
+  return upgraded;
 }
 
 export function assertSemanticForm(form) {
@@ -77,22 +145,23 @@ export function assertSemanticForm(form) {
     throw new Error(`Unsupported semantic form contract version: ${String(form.contractVersion)}.`);
   }
   if (!form.database || typeof form.database !== "object") throw new Error("Semantic form is missing database metadata.");
-  if (!form.objects || typeof form.objects !== "object" || Array.isArray(form.objects)) {
-    throw new Error("Semantic form is missing its objects map.");
+  if (!form.schemaObjects || typeof form.schemaObjects !== "object" || Array.isArray(form.schemaObjects)) {
+    throw new Error("Semantic form is missing its schemaObjects map.");
   }
   return form;
 }
 
 export function syncSemanticForm({ catalog, existingForm = null, seedComments = false, now = new Date() }) {
   const normalized = normalizeCatalog(catalog);
-  if (existingForm) assertSemanticForm(existingForm);
-  const existingObjects = existingForm?.objects ?? {};
-  const objects = {};
-  const changes = { addedObjects: [], removedObjects: [], addedFields: [], removedFields: [], addedRelationships: [], removedRelationships: [] };
+  const upgradedExistingForm = existingForm ? upgradeSemanticForm(existingForm) : null;
+  if (upgradedExistingForm) assertSemanticForm(upgradedExistingForm);
+  const existingSchemaObjects = upgradedExistingForm?.schemaObjects ?? {};
+  const schemaObjects = {};
+  const changes = { addedSchemaObjects: [], removedSchemaObjects: [], addedFields: [], removedFields: [], addedRelationships: [], removedRelationships: [] };
 
   for (const catalogObject of normalized.objects) {
-    const previous = existingObjects[catalogObject.name];
-    if (!previous) changes.addedObjects.push(catalogObject.name);
+    const previous = existingSchemaObjects[catalogObject.name];
+    if (!previous) changes.addedSchemaObjects.push(catalogObject.name);
     const fields = {};
     const previousFields = previous?.fields ?? {};
     for (const column of catalogObject.columns) {
@@ -134,7 +203,7 @@ export function syncSemanticForm({ catalog, existingForm = null, seedComments = 
       };
     }
 
-    objects[catalogObject.name] = {
+    schemaObjects[catalogObject.name] = {
       mechanics: mechanicalObject(catalogObject),
       semantics: mergeKnownShape(
         seededObjectSemantics(catalogObject.comment, seedComments && !previous),
@@ -145,10 +214,10 @@ export function syncSemanticForm({ catalog, existingForm = null, seedComments = 
     };
   }
 
-  for (const [objectName, previous] of Object.entries(existingObjects)) {
-    if (Object.hasOwn(objects, objectName)) continue;
-    changes.removedObjects.push(objectName);
-    objects[objectName] = {
+  for (const [schemaObjectName, previous] of Object.entries(existingSchemaObjects)) {
+    if (Object.hasOwn(schemaObjects, schemaObjectName)) continue;
+    changes.removedSchemaObjects.push(schemaObjectName);
+    schemaObjects[schemaObjectName] = {
       ...clone(previous),
       mechanics: { ...clone(previous.mechanics), present: false },
     };
@@ -170,8 +239,12 @@ export function syncSemanticForm({ catalog, existingForm = null, seedComments = 
       compilerOwned: "The compiler refreshes mechanics and database metadata and preserves semantics during synchronization.",
       authority: "The database is authoritative for mechanics. This file is the sole authority for human meaning.",
     },
-    objects: Object.fromEntries(Object.entries(objects).sort(([a], [b]) => a.localeCompare(b))),
+    schemaObjects: Object.fromEntries(Object.entries(schemaObjects).sort(([a], [b]) => a.localeCompare(b))),
   };
+  seedDerivedInheritance(form, {
+    schemaObjectNames: new Set(changes.addedSchemaObjects),
+    fieldNames: new Set(changes.addedFields),
+  });
   const unresolved = unresolvedFields(form);
   return {
     form,
@@ -184,13 +257,14 @@ export function syncSemanticForm({ catalog, existingForm = null, seedComments = 
 }
 
 export function inspectSemanticForm(form) {
-  assertSemanticForm(form);
-  const unresolved = unresolvedFields(form);
-  const activeObjects = Object.values(form.objects).filter((object) => object.mechanics.present !== false);
+  const upgraded = upgradeSemanticForm(form);
+  assertSemanticForm(upgraded);
+  const unresolved = unresolvedFields(upgraded);
+  const activeSchemaObjects = Object.values(upgraded.schemaObjects).filter((schemaObject) => schemaObject.mechanics.present !== false);
   return {
-    schemaFingerprint: form.database.schemaFingerprint,
-    activeObjectCount: activeObjects.length,
-    retiredObjectCount: Object.keys(form.objects).length - activeObjects.length,
+    schemaFingerprint: upgraded.database.schemaFingerprint,
+    activeSchemaObjectCount: activeSchemaObjects.length,
+    retiredSchemaObjectCount: Object.keys(upgraded.schemaObjects).length - activeSchemaObjects.length,
     unresolvedSemanticFields: unresolved,
     unresolvedCount: unresolved.length,
   };

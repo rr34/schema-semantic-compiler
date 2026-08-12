@@ -28,6 +28,7 @@ MariaDB examples:
 
 Projection examples:
   ssc project --form ./db/schema-semantics.json --sql-file ./query.sql
+  ssc project --form ./db/schema-semantics.json --request "What appointments are coming up?"
   ssc project --form ./db/schema-semantics.json --operation-file ./operation.json --output ./projection.json
 
 Options:
@@ -142,9 +143,13 @@ async function synchronize(options) {
 function project(options) {
   if (!options.form) throw new Error("project requires --form FILE.");
   if (options.sql && options.sql_file) throw new Error("Use either --sql or --sql-file, not both.");
+  if (options.request && options.request_file) throw new Error("Use either --request or --request-file, not both.");
   const sql = options.sql_file ? fs.readFileSync(path.resolve(options.sql_file), "utf8") : options.sql ?? null;
+  const requestText = options.request_file
+    ? fs.readFileSync(path.resolve(options.request_file), "utf8")
+    : options.request ?? null;
   const operation = options.operation_file ? readJson(options.operation_file) : null;
-  const output = compileSchemaProjection({ form: readJson(options.form), sql, operation });
+  const output = compileSchemaProjection({ form: readJson(options.form), sql, operation, requestText });
   if (options.output) {
     writeJson(options.output, output);
     return { command: "project", output: path.resolve(options.output), projectionId: output.projectionId };

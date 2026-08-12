@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:schema-semantic-compiler:schema-semantic-projection:1",
+  "$id": "urn:schema-semantic-compiler:schema-semantic-projection:2",
   "title": "Schema Semantic Compiler projection product",
   "type": "object",
   "required": [
@@ -16,7 +16,7 @@
   ],
   "properties": {
     "product": { "const": "schema-semantic-compiler/schema-semantic-projection" },
-    "productContractVersion": { "const": 1 },
+    "productContractVersion": { "const": 2 },
     "projectionId": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "compiledAt": { "type": "string", "format": "date-time" },
     "compiler": { "type": "object" },

@@ -7,6 +7,8 @@ export {
   PROJECTION_KIND,
 } from "./constants.js";
 export { normalizeCatalog } from "./catalog.js";
-export { assertSemanticForm, inspectSemanticForm, syncSemanticForm } from "./form.js";
+export { assertSemanticForm, inspectSemanticForm, syncSemanticForm, upgradeSemanticForm } from "./form.js";
+export { resolveFieldSemantics } from "./inheritance.js";
+export { rankSchemaObjects } from "./routing.js";
 export { analyzeSqlReferences } from "./sql-references.js";
 export { compileSchemaProjection } from "./projection.js";

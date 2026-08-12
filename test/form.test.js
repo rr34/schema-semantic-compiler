@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeCatalog, syncSemanticForm } from "../src/index.js";
+import { normalizeCatalog, syncSemanticForm, upgradeSemanticForm } from "../src/index.js";
 
 const initialCatalog = {
   engine: "sqlite",
@@ -22,12 +22,16 @@ const initialCatalog = {
 
 test("one form seeds comments once and preserves human semantics during synchronization", () => {
   const initialized = syncSemanticForm({ catalog: initialCatalog, seedComments: true, now: new Date("2026-01-01T00:00:00Z") });
-  assert.equal(initialized.form.objects.notes.semantics.purpose, "Stores notes.");
-  assert.equal(initialized.form.objects.notes.semantics.rowMeaning, "Stores notes.");
-  assert.equal(initialized.form.objects.notes.fields.body.semantics.meaning, "Complete note text.");
+  assert.equal(initialized.form.schemaObjects.notes.semantics.purpose, "Stores notes.");
+  assert.equal(initialized.form.schemaObjects.notes.semantics.rowMeaning, "Stores notes.");
+  assert.deepEqual(initialized.form.schemaObjects.notes.semantics.keywords, []);
+  assert.equal(initialized.form.schemaObjects.notes.semantics.routingWeight, null);
+  assert.equal(initialized.form.schemaObjects.notes.fields.body.semantics.meaning, "Complete note text.");
+  assert.deepEqual(initialized.form.schemaObjects.notes.fields.body.semantics.keywords, []);
+  assert.equal(initialized.form.schemaObjects.notes.fields.body.semantics.routingWeight, null);
 
-  initialized.form.objects.notes.semantics.rowMeaning = "One durable user note.";
-  initialized.form.objects.notes.fields.body.semantics.meaning = "Canonical content interpreted by the agent.";
+  initialized.form.schemaObjects.notes.semantics.rowMeaning = "One durable user note.";
+  initialized.form.schemaObjects.notes.fields.body.semantics.meaning = "Canonical content interpreted by the agent.";
 
   const changedCatalog = structuredClone(initialCatalog);
   changedCatalog.schemaVersion = 2;
@@ -43,15 +47,33 @@ test("one form seeds comments once and preserves human semantics during synchron
     now: new Date("2026-01-02T00:00:00Z"),
   });
 
-  assert.equal(synchronized.form.objects.notes.semantics.rowMeaning, "One durable user note.");
-  assert.equal(synchronized.form.objects.notes.fields.body.mechanics.present, false);
+  assert.equal(synchronized.form.schemaObjects.notes.semantics.rowMeaning, "One durable user note.");
+  assert.equal(synchronized.form.schemaObjects.notes.fields.body.mechanics.present, false);
   assert.equal(
-    synchronized.form.objects.notes.fields.body.semantics.meaning,
+    synchronized.form.schemaObjects.notes.fields.body.semantics.meaning,
     "Canonical content interpreted by the agent.",
   );
-  assert.equal(synchronized.form.objects.notes.fields.status.semantics.meaning, null);
+  assert.equal(synchronized.form.schemaObjects.notes.fields.status.semantics.meaning, null);
   assert.deepEqual(synchronized.report.addedFields, ["notes.status"]);
   assert.deepEqual(synchronized.report.removedFields, ["notes.body"]);
+});
+
+test("version 1 forms upgrade objects to schemaObjects without losing human answers", () => {
+  const { form } = syncSemanticForm({ catalog: initialCatalog });
+  const versionOne = structuredClone(form);
+  versionOne.contractVersion = 1;
+  versionOne.objects = versionOne.schemaObjects;
+  delete versionOne.schemaObjects;
+  delete versionOne.objects.notes.semantics.derivedFrom;
+  delete versionOne.objects.notes.fields.body.semantics.inheritsFrom;
+  versionOne.objects.notes.fields.body.semantics.meaning = "Human answer retained during upgrade.";
+
+  const upgraded = upgradeSemanticForm(versionOne);
+  assert.equal(upgraded.contractVersion, 2);
+  assert.ok(upgraded.schemaObjects.notes);
+  assert.equal(upgraded.schemaObjects.notes.fields.body.semantics.meaning, "Human answer retained during upgrade.");
+  assert.equal(upgraded.schemaObjects.notes.fields.body.semantics.inheritsFrom, null);
+  assert.equal(Object.hasOwn(upgraded, "objects"), false);
 });
 
 test("schema fingerprint ignores comments because the JSON form owns semantics", () => {

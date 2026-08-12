@@ -1,7 +1,7 @@
 {
   "name": "read_recent_activity",
   "purpose": "Read the latest observable agent events.",
-  "objects": [
+  "schemaObjects": [
     "activity_events"
   ],
   "fields": {

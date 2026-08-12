@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:schema-semantic-compiler:schema-semantic-form:1",
+  "$id": "urn:schema-semantic-compiler:schema-semantic-form:2",
   "title": "Schema Semantic Compiler single-file form",
   "type": "object",
-  "required": ["kind", "contractVersion", "compiler", "database", "instructions", "objects"],
+  "required": ["kind", "contractVersion", "compiler", "database", "instructions", "schemaObjects"],
   "properties": {
     "kind": { "const": "schema-semantic-form" },
-    "contractVersion": { "const": 1 },
+    "contractVersion": { "const": 2 },
     "compiler": {
       "type": "object",
       "required": ["name", "version"],
@@ -29,7 +29,7 @@
       "additionalProperties": false
     },
     "instructions": { "type": "object" },
-    "objects": {
+    "schemaObjects": {
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/objectForm" }
     }
@@ -40,12 +40,15 @@
     "textArray": { "type": "array", "items": { "type": "string" } },
     "objectSemantics": {
       "type": "object",
-      "required": ["purpose", "rowMeaning", "sourceOfTruth", "synonyms", "importantRules", "sensitivity"],
+      "required": ["purpose", "rowMeaning", "sourceOfTruth", "derivedFrom", "synonyms", "keywords", "routingWeight", "importantRules", "sensitivity"],
       "properties": {
         "purpose": { "$ref": "#/$defs/nullableText" },
         "rowMeaning": { "$ref": "#/$defs/nullableText" },
         "sourceOfTruth": { "type": ["boolean", "null"] },
+        "derivedFrom": { "$ref": "#/$defs/textArray" },
         "synonyms": { "$ref": "#/$defs/textArray" },
+        "keywords": { "$ref": "#/$defs/textArray" },
+        "routingWeight": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
         "importantRules": { "$ref": "#/$defs/textArray" },
         "sensitivity": { "$ref": "#/$defs/nullableText" }
       },
@@ -53,13 +56,16 @@
     },
     "fieldSemantics": {
       "type": "object",
-      "required": ["meaning", "units", "format", "allowedValueMeanings", "synonyms", "examples", "importantRules", "sensitivity"],
+      "required": ["inheritsFrom", "meaning", "units", "format", "allowedValueMeanings", "synonyms", "keywords", "routingWeight", "examples", "importantRules", "sensitivity"],
       "properties": {
+        "inheritsFrom": { "$ref": "#/$defs/nullableText" },
         "meaning": { "$ref": "#/$defs/nullableText" },
         "units": { "$ref": "#/$defs/nullableText" },
         "format": { "$ref": "#/$defs/nullableText" },
         "allowedValueMeanings": { "type": "object", "additionalProperties": { "type": "string" } },
         "synonyms": { "$ref": "#/$defs/textArray" },
+        "keywords": { "$ref": "#/$defs/textArray" },
+        "routingWeight": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
         "examples": { "type": "array" },
         "importantRules": { "$ref": "#/$defs/textArray" },
         "sensitivity": { "$ref": "#/$defs/nullableText" }

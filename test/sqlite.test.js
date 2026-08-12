@@ -40,8 +40,8 @@ test("SQLite adapter extracts mechanics, checks, relationships, and bootstrap co
     assert.deepEqual(notes.indexes.find((index) => index.name === "notes_status").columns, ["status"]);
 
     const { form } = syncSemanticForm({ catalog, seedComments: true });
-    assert.equal(form.objects.notes.fields.body.semantics.meaning, "Complete note content.");
-    assert.equal(form.objects.notes.fields.status.semantics.meaning, null);
+    assert.equal(form.schemaObjects.notes.fields.body.semantics.meaning, "Complete note content.");
+    assert.equal(form.schemaObjects.notes.fields.status.semantics.meaning, null);
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }

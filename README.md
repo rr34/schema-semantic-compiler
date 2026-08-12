@@ -27,13 +27,13 @@ There are no separate answer, question, and generated-manifest files. Mechanical
 ```json
 {
   "kind": "schema-semantic-form",
-  "contractVersion": 1,
+  "contractVersion": 2,
   "database": {
     "engine": "sqlite",
     "schemaVersion": 3,
     "schemaFingerprint": "..."
   },
-  "objects": {
+  "schemaObjects": {
     "activity_events": {
       "mechanics": {
         "present": true,
@@ -43,7 +43,10 @@ There are no separate answer, question, and generated-manifest files. Mechanical
         "purpose": "Preserve complete chronological agent activity.",
         "rowMeaning": "One observable event in the agent system.",
         "sourceOfTruth": true,
+        "derivedFrom": [],
         "synonyms": ["ledger event"],
+        "keywords": ["what happened", "agent activity", "tool call"],
+        "routingWeight": 0.8,
         "importantRules": [
           "Use event_seq for exact local ledger ordering."
         ],
@@ -58,11 +61,14 @@ There are no separate answer, question, and generated-manifest files. Mechanical
             "nullable": true
           },
           "semantics": {
+            "inheritsFrom": null,
             "meaning": "Complete human-readable content visible for the event.",
             "units": null,
             "format": "plain text",
             "allowedValueMeanings": {},
             "synonyms": ["event content"],
+            "keywords": ["request text", "response text", "what was said"],
+            "routingWeight": 0.9,
             "examples": [],
             "importantRules": [],
             "sensitivity": "May contain private user content."
@@ -73,6 +79,35 @@ There are no separate answer, question, and generated-manifest files. Mechanical
   }
 }
 ```
+
+`schemaObjects` is the standard database umbrella for tables, views, and other named schema structures represented by the form. It avoids confusing those database structures with JSON's own object value type.
+
+Derived schema objects retain their own purpose and filtering or calculation rules without duplicating every source-field explanation:
+
+```json
+{
+  "schemaObjects": {
+    "upcoming_calendar": {
+      "semantics": {
+        "purpose": "Select future tentative and confirmed events.",
+        "rowMeaning": "One upcoming calendar event.",
+        "sourceOfTruth": false,
+        "derivedFrom": ["calendar_events"]
+      },
+      "fields": {
+        "title": {
+          "semantics": {
+            "inheritsFrom": "calendar_events.title",
+            "meaning": null
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+At projection time the compiler recursively resolves inherited field meaning, units, format, allowed-value explanations, synonyms, rules, examples, and sensitivity. A nonblank value on the derived field supplements or overrides the inherited value. Invalid references and inheritance cycles fail visibly.
 
 Ownership is explicit:
 
@@ -97,11 +132,11 @@ Every projection is unmistakably labeled:
 ```json
 {
   "product": "schema-semantic-compiler/schema-semantic-projection",
-  "productContractVersion": 1,
+  "productContractVersion": 2,
   "projectionId": "d74d...",
   "compiler": {
     "name": "schema-semantic-compiler",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "source": {
     "databaseEngine": "sqlite",
@@ -109,7 +144,7 @@ Every projection is unmistakably labeled:
     "schemaFingerprint": "4e4a..."
   },
   "schemaProjection": {
-    "objects": {}
+    "schemaObjects": {}
   },
   "compilerTrace": {
     "selectionReasons": {},
@@ -120,6 +155,8 @@ Every projection is unmistakably labeled:
 ```
 
 The host application can attach this product to a query and its result. Observability can search for the exact `product` value, group by `projectionId`, and display the schema fingerprint, included objects, selection reasons, and unresolved semantics.
+
+The same product can be compiled before SQL or structured tool arguments exist. `keywords` may contain individual terms or short phrases; they are deterministic routing inputs, not extra prose for the LLM. `routingWeight` is a human-controlled number from 0 through 1 that modestly adjusts an actual language match. It never selects an otherwise unrelated object by itself. The projection sent to the LLM omits both properties; the compiler trace retains scores and exact match reasons for observability.
 
 The projection contract is published at [`schemas/schema-semantic-projection.schema.json`](schemas/schema-semantic-projection.schema.json).
 
@@ -167,7 +204,8 @@ Synchronization:
 
 - Refreshes compiler-owned mechanics.
 - Preserves every human-owned semantic value.
-- Adds blank semantic forms for new objects, fields, and relationships.
+- Adds blank semantic forms for new schema objects, fields, and relationships.
+- Seeds inspectable field inheritance for unambiguous fields in newly discovered views.
 - Marks removed elements with `mechanics.present: false` instead of discarding their explanations.
 - Reports additions, removals, and unresolved semantic fields.
 - Updates the schema fingerprint.
@@ -191,15 +229,27 @@ ssc project \
 
 The SQL parser is conservative and read-only. It finds referenced schema objects and fields; it does not validate, authorize, rewrite, generate, or run the statement.
 
+### Compile from request language before SQL
+
+```bash
+ssc project \
+  --form ./db/schema-semantics.json \
+  --request "What appointments do I have coming up?"
+```
+
+`--request-file` accepts the request from a file. Request routing compares normalized whole words and short phrases with schema-object and field names, synonyms, and human-maintained keywords. It returns the highest-scoring objects, their complete field explanations, relationship context, and an observable scoring trace. If nothing matches, it returns an inspectable empty projection instead of inventing relevance.
+
+This pre-SQL projection is approximate. A host can place only its `schemaProjection` in model context, use the trace for observability, and then compile an exact second projection from the resulting operation or SQL.
+
 ### Compile from an explicit operation
 
-An operation can identify relevant objects without SQL:
+An operation can identify relevant schema objects without SQL:
 
 ```json
 {
   "name": "read_recent_activity",
   "purpose": "Read the latest observable agent events.",
-  "objects": ["activity_events"],
+  "schemaObjects": ["activity_events"],
   "fields": {
     "activity_events": [
       "event_seq",
@@ -244,9 +294,15 @@ const product = compileSchemaProjection({
   form,
   operation: {
     name: "read_recent_activity",
-    objects: ["activity_events"],
+    schemaObjects: ["activity_events"],
   },
   sql: "SELECT event_seq, content_text FROM activity_events ORDER BY event_seq DESC LIMIT ?",
+});
+
+const preSqlProduct = compileSchemaProjection({
+  form,
+  requestText: "What appointments do I have coming up?",
+  routing: { limit: 3, minimumScore: 3 },
 });
 ```
 
@@ -297,7 +353,7 @@ It does not:
 - Replace an application's MCP or database access policy
 - Use an LLM
 
-For a direct SQLite agent, projections can explain actual tables and views. For an MCP server, projections can explain only the public semantic entities and selected result fields rather than leaking private implementation details. The host decides which objects belong in its public form.
+For a direct SQLite agent, projections can explain actual tables and views. For an MCP server, projections can explain only the public semantic entities and selected result fields rather than leaking private implementation details. The host decides which schema objects belong in its public form.
 
 ## Testing
 
@@ -313,10 +369,12 @@ The current suite covers:
 - Retired object and field handling
 - Comment-independent schema fingerprints
 - SQL and operation-driven projections
+- Version-1 form upgrades to `schemaObjects`
+- Derived-view field inheritance without duplicate source projections
 - Observable product identity and trace metadata
 - SQLite introspection
 - MariaDB `information_schema` normalization
 
 ## Status
 
-Version `0.1.0` is an initial implementation intended for real integration and refinement. The JSON contracts should be treated as versioned public interfaces. The SQL reference analyzer is intentionally conservative; applications can always supply explicit operation objects when exact relevance matters.
+Version `0.2.0` introduces form and projection contract version 2: `schemaObjects`, explicit derived-object lineage, and field semantic inheritance. Version-1 forms are upgraded deterministically during synchronization or projection. The JSON contracts are versioned public interfaces, and the SQL reference analyzer remains intentionally conservative; applications can always supply explicit operation schema objects when exact relevance matters.
