@@ -136,7 +136,7 @@ Every projection is unmistakably labeled:
   "projectionId": "d74d...",
   "compiler": {
     "name": "schema-semantic-compiler",
-    "version": "0.2.0"
+    "version": "0.2.1"
   },
   "source": {
     "databaseEngine": "sqlite",
@@ -147,14 +147,14 @@ Every projection is unmistakably labeled:
     "schemaObjects": {}
   },
   "compilerTrace": {
-    "selectionReasons": {},
-    "unresolvedSemantics": [],
     "notice": "This product explains schema context only. It did not generate, authorize, or execute SQL."
   }
 }
 ```
 
 The host application can attach this product to a query and its result. Observability can search for the exact `product` value, group by `projectionId`, and display the schema fingerprint, included objects, selection reasons, and unresolved semantics.
+
+Compiled products recursively omit blank strings, `null`, empty arrays, and empty objects. Meaningful `false` and `0` values remain. The maintained semantic form keeps its visible blanks for humans to fill in, while per-request projections contain only information the compiler actually has. Use `ssc check` to inspect incomplete human semantics; projections do not repeat blank-field warnings.
 
 The same product can be compiled before SQL or structured tool arguments exist. `keywords` may contain individual terms or short phrases; they are deterministic routing inputs, not extra prose for the LLM. `routingWeight` is a human-controlled number from 0 through 1 that modestly adjusts an actual language match. It never selects an otherwise unrelated object by itself. The projection sent to the LLM omits both properties; the compiler trace retains scores and exact match reasons for observability.
 
@@ -377,4 +377,4 @@ The current suite covers:
 
 ## Status
 
-Version `0.2.0` introduces form and projection contract version 2: `schemaObjects`, explicit derived-object lineage, and field semantic inheritance. Version-1 forms are upgraded deterministically during synchronization or projection. The JSON contracts are versioned public interfaces, and the SQL reference analyzer remains intentionally conservative; applications can always supply explicit operation schema objects when exact relevance matters.
+Version `0.2.0` introduces form and projection contract version 2: `schemaObjects`, explicit derived-object lineage, and field semantic inheritance. Version `0.2.1` makes compiled products concise by omitting blank values recursively while retaining meaningful `false` and `0` values. Version-1 forms are upgraded deterministically during synchronization or projection. The JSON contracts are versioned public interfaces, and the SQL reference analyzer remains intentionally conservative; applications can always supply explicit operation schema objects when exact relevance matters.

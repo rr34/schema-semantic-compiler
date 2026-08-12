@@ -10,6 +10,24 @@ import { rankSchemaObjects } from "./routing.js";
 import { analyzeSqlReferences } from "./sql-references.js";
 import { asNullableText, fingerprint, uniqueSorted } from "./util.js";
 
+function omitBlankValues(value) {
+  if (value == null) return undefined;
+  if (typeof value === "string") return value.trim() ? value : undefined;
+  if (Array.isArray(value)) {
+    const items = value
+      .map((item) => omitBlankValues(item))
+      .filter((item) => item !== undefined);
+    return items.length > 0 ? items : undefined;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value)
+      .map(([key, item]) => [key, omitBlankValues(item)])
+      .filter(([, item]) => item !== undefined);
+    return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  }
+  return value;
+}
+
 function normalizeOperation(operation) {
   if (!operation) return { name: null, purpose: null, schemaObjects: [], fields: {} };
   return {
@@ -153,7 +171,6 @@ export function compileSchemaProjection({
       const semantics = resolveFieldSemantics(form, objectName, fieldName);
       fields[fieldName] = fieldProjection(field, semantics);
       addReason(reasons, `${objectName}.${fieldName}`, includeAllFields ? "Included to describe the selected object." : "Referenced by the operation or SQL.");
-      if (!asNullableText(semantics.meaning)) unresolved.push(`${objectName}.${fieldName}: meaning is blank.`);
     }
     for (const fieldName of requestedFields) {
       if (!Object.hasOwn(schemaObject.fields, fieldName)) unresolved.push(`${objectName}.${fieldName}: field is not present in the semantic form.`);
@@ -167,11 +184,8 @@ export function compileSchemaProjection({
       if (!usesSourceField && !joinsSelectedObject) continue;
       relationships[relationshipId] = relationshipProjection(relationship);
       addReason(reasons, `${objectName}.${relationshipId}`, usesSourceField ? "Uses a selected foreign-key field." : "Connects selected objects.");
-      if (!asNullableText(relationship.semantics.meaning)) unresolved.push(`${objectName}.${relationshipId}: relationship meaning is blank.`);
     }
 
-    if (!asNullableText(schemaObject.semantics.purpose)) unresolved.push(`${objectName}: purpose is blank.`);
-    if (!asNullableText(schemaObject.semantics.rowMeaning)) unresolved.push(`${objectName}: rowMeaning is blank.`);
     projectionSchemaObjects[objectName] = {
       kind: schemaObject.mechanics.kind,
       purpose: schemaObject.semantics.purpose,
@@ -186,13 +200,40 @@ export function compileSchemaProjection({
     };
   }
 
-  const deterministicProduct = {
-    sourceFingerprint: form.database.schemaFingerprint,
-    operation: normalizedOperation,
+  const conciseOperation = omitBlankValues({
+    ...normalizedOperation,
     requestText: requestText ?? null,
-    routingCandidates,
     sql: sql ?? null,
-    projection: projectionSchemaObjects,
+  }) ?? {};
+  const conciseSchemaProjection = omitBlankValues({
+    purpose: normalizedOperation.purpose,
+    schemaObjects: projectionSchemaObjects,
+  }) ?? {};
+  const conciseCompilerTrace = omitBlankValues({
+    selectionReasons: reasons,
+    requestRouting: {
+      attempted: Boolean(requestText),
+      candidateLimit: routingLimit,
+      minimumScore: routingMinimumScore,
+      candidates: routingCandidates,
+    },
+    unresolvedSemantics: uniqueSorted(unresolved),
+    notice: "This product explains schema context only. It did not generate, authorize, or execute SQL.",
+  }) ?? {};
+  const conciseSource = omitBlankValues({
+    semanticFormKind: form.kind,
+    semanticFormContractVersion: form.contractVersion,
+    databaseEngine: form.database.engine,
+    databaseName: form.database.name,
+    schemaVersion: form.database.schemaVersion,
+    schemaFingerprint: form.database.schemaFingerprint,
+  }) ?? {};
+
+  const deterministicProduct = {
+    source: conciseSource,
+    operation: conciseOperation,
+    schemaProjection: conciseSchemaProjection,
+    compilerTrace: conciseCompilerTrace,
   };
   const projectionId = fingerprint(deterministicProduct);
   return {
@@ -201,33 +242,9 @@ export function compileSchemaProjection({
     projectionId,
     compiledAt: now.toISOString(),
     compiler: { name: PACKAGE_NAME, version: PACKAGE_VERSION },
-    source: {
-      semanticFormKind: form.kind,
-      semanticFormContractVersion: form.contractVersion,
-      databaseEngine: form.database.engine,
-      databaseName: form.database.name,
-      schemaVersion: form.database.schemaVersion,
-      schemaFingerprint: form.database.schemaFingerprint,
-    },
-    operation: {
-      ...normalizedOperation,
-      requestText: requestText ?? null,
-      sql: sql ?? null,
-    },
-    schemaProjection: {
-      purpose: normalizedOperation.purpose,
-      schemaObjects: projectionSchemaObjects,
-    },
-    compilerTrace: {
-      selectionReasons: reasons,
-      requestRouting: {
-        attempted: Boolean(requestText),
-        candidateLimit: routingLimit,
-        minimumScore: routingMinimumScore,
-        candidates: routingCandidates,
-      },
-      unresolvedSemantics: uniqueSorted(unresolved),
-      notice: "This product explains schema context only. It did not generate, authorize, or execute SQL.",
-    },
+    source: conciseSource,
+    operation: conciseOperation,
+    schemaProjection: conciseSchemaProjection,
+    compilerTrace: conciseCompilerTrace,
   };
 }

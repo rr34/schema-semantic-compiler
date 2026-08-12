@@ -69,7 +69,7 @@ test("projection is unmistakably labeled and contains only SQL-relevant explanat
   assert.deepEqual(Object.keys(projection.schemaProjection.schemaObjects.contacts.fields).sort(), ["contact_id", "display_name"]);
   assert.deepEqual(Object.keys(projection.schemaProjection.schemaObjects.notes.fields).sort(), ["body", "contact_id", "note_id"]);
   assert.ok(projection.schemaProjection.schemaObjects.notes.relationships["fk:contact_id->contacts.contact_id"]);
-  assert.deepEqual(projection.compilerTrace.unresolvedSemantics, []);
+  assert.equal(Object.hasOwn(projection.compilerTrace, "unresolvedSemantics"), false);
   assert.match(projection.compilerTrace.notice, /did not generate, authorize, or execute SQL/);
 });
 
@@ -112,8 +112,45 @@ test("request routing returns an inspectable empty projection when nothing match
     form: completedForm(),
     requestText: "Explain how photosynthesis works.",
   });
-  assert.deepEqual(projection.schemaProjection.schemaObjects, {});
-  assert.deepEqual(projection.compilerTrace.requestRouting.candidates, []);
+  assert.deepEqual(projection.schemaProjection, {});
+  assert.equal(Object.hasOwn(projection.compilerTrace.requestRouting, "candidates"), false);
+});
+
+test("compiled products omit blanks recursively while preserving meaningful false and zero values", () => {
+  const form = completedForm();
+  const contacts = form.schemaObjects.contacts;
+  contacts.semantics.rowMeaning = "   ";
+  contacts.semantics.sourceOfTruth = false;
+  contacts.semantics.derivedFrom = [];
+  contacts.semantics.synonyms = [];
+  contacts.semantics.importantRules = [];
+  contacts.semantics.sensitivity = null;
+  const displayName = contacts.fields.display_name;
+  displayName.semantics.meaning = null;
+  displayName.semantics.units = "";
+  displayName.semantics.allowedValueMeanings = {};
+  displayName.semantics.examples = [];
+
+  const projection = compileSchemaProjection({
+    form,
+    operation: { schemaObjects: ["contacts"] },
+  });
+
+  const object = projection.schemaProjection.schemaObjects.contacts;
+  assert.equal(Object.hasOwn(object, "rowMeaning"), false);
+  assert.equal(object.sourceOfTruth, false);
+  assert.equal(Object.hasOwn(object, "derivedFrom"), false);
+  assert.equal(Object.hasOwn(object, "relationships"), false);
+  const field = object.fields.display_name;
+  assert.equal(field.nullable, false);
+  assert.equal(field.primaryKey, false);
+  assert.equal(field.generated, false);
+  for (const key of ["meaning", "units", "allowedValues", "allowedValueMeanings", "examples", "importantRules"]) {
+    assert.equal(Object.hasOwn(field, key), false, `${key} should be omitted`);
+  }
+  assert.equal(Object.hasOwn(projection.operation, "name"), false);
+  assert.equal(Object.hasOwn(projection.operation, "fields"), false);
+  assert.equal(Object.hasOwn(projection.compilerTrace, "unresolvedSemantics"), false);
 });
 
 test("derived views inherit field semantics without duplicating source objects in projections", () => {
@@ -170,5 +207,5 @@ test("derived views inherit field semantics without duplicating source objects i
   const field = projection.schemaProjection.schemaObjects.named_contacts.fields.display_name;
   assert.equal(field.inheritsFrom, "contacts.display_name");
   assert.equal(field.meaning, "Name shown for the contact.");
-  assert.deepEqual(projection.compilerTrace.unresolvedSemantics, []);
+  assert.equal(Object.hasOwn(projection.compilerTrace, "unresolvedSemantics"), false);
 });

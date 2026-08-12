@@ -1,6 +1,6 @@
 {
   "name": "schema-semantic-compiler",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Compile database mechanics and one human-maintained semantic form into small, inspectable AI context projections.",
   "type": "module",
   "engines": {

@@ -1,5 +1,5 @@
 export const PACKAGE_NAME = "schema-semantic-compiler";
-export const PACKAGE_VERSION = "0.2.0";
+export const PACKAGE_VERSION = "0.2.1";
 export const FORM_KIND = "schema-semantic-form";
 export const FORM_CONTRACT_VERSION = 2;
 export const PROJECTION_KIND = "schema-semantic-projection";
